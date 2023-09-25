@@ -9,7 +9,6 @@ import monai
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from monai.networks.nets import resnet18
 from monai.transforms import (
     AddChanneld,
     CenterSpatialCropd,
@@ -22,8 +21,6 @@ from monai.transforms import (
     ToTensord,
     NormalizeIntensityd,
 )
-from torch.nn.modules.loss import _Loss
-from torch.utils.tensorboard import SummaryWriter
 
 
 def get_data_list(data_folder):
@@ -49,7 +46,7 @@ def get_data_list(data_folder):
     
     return images2d_path , gt2d_path , images3d_path , gt3d_path 
 
-data_folder = r'C:\My_Data\M2M Data\data\data_2\val'
+data_folder = r'C:\My_Data\M2M Data\data\data_2\train'
 
 images2d_path , gt2d_path , images3d_path, gt3d_path = get_data_list(data_folder)
 
@@ -62,32 +59,37 @@ assert all_files_exist(images3d_path), "Some 3D images are missing."
 assert all_files_exist(gt2d_path), "Some 2D images are missing."
 assert all_files_exist(gt3d_path), "Some 3D images are missing."
 
-def get_transforms(mode="small"):
-    if mode == "full":
-        pixdim = [2.0, 2.0, 5.0]
-        pad3d = [256, 256, 32]
-        crop3d = [256, 256, 32]
-    elif mode == "small":
-        pixdim = [8.0, 8.0, 8.0]
-
-        pad3d = [64, 64, 32]
-        crop3d = [64, 64, 32]
-
+def get_transforms():
     return Compose(
         [
             LoadImaged(keys=["image2d", "label2d","image3d","label3d",]),
-            SqueezeDimd(keys=["image2d","label2d"], dim=-1),
+            AddChanneld(keys=["image3d","label3d","image2d", "label2d"]), ## does it always add to  axis = 0 ?
+            SqueezeDimd(keys=["image2d", "label2d"], dim=-1),   ## wil sequeeze last dimenssion , if we expand first and then sequees
+                                                                ## it will affect the 2D images pixeims as well, and change spatial dims.
+            ## Adjust Spacing for 2D Data  ###
+            Spacingd(keys=["image2d"], pixdim=[1.25,1.25], mode=("bilinear")),
+            Spacingd(keys=["label2d"], pixdim=[1.25,1.25], mode=("nearest")),
+                        
+            ## Adjust Spacing for 3D Data  ###
+
+            Spacingd(keys=["image3d"], pixdim=[1.25,1.25,5], mode=("bilinear")),
+            Spacingd(keys=["label3d"], pixdim=[1.25, 1.25,5], mode=("nearest")),
             
-            AddChanneld(keys=["image2d", "label2d","image3d","label3d",]),
-            Spacingd(keys=["image3d","label3d"], pixdim=pixdim, mode=("bilinear")),
-            # Orientationd(keys=["image3d"], axcodes="RAS"),
-            SpatialPadd(keys=["image2d", "label2d"], spatial_size=(256, 256)),
-            SpatialPadd(keys=["image3d","label3d"], spatial_size=pad3d),
+ 
+            ## Cropping 2D Data  ###
+            SpatialPadd(keys=["image2d","label2d"], spatial_size=(256, 256)), # for this I understand why we use this, i.e. if the spatial
+                                                                              # dims is smaller than 256 it will fist padd to make it 256 
+                                                                              # followed by center crop of (256 x 256)
             CenterSpatialCropd(keys=["image2d","label2d"], roi_size=(256, 256)),
-            CenterSpatialCropd(keys=["image3d","label3d"], roi_size=crop3d),
-            # mean and std normalize -- offset input
-            # NormalizeIntensityd(keys=["image2d", "image3d"], subtrahend=10, divisor=1),
-            ToTensord(keys=["image2d", "label2d","image3d","label3d"]),
+            
+            ## Cropping 3D Data  ###
+            SpatialPadd(keys=["image3d","label3d"], spatial_size=(256,256,32)),  
+            CenterSpatialCropd(keys=["image3d","label3d"], roi_size=(256,256,32)),
+            
+            Orientationd(keys=["image3d","label3d"], axcodes="RAS"), ## this moves the depth to second last dimenssions not the first [B,C,D,H,W]
+            
+            # ToTensord(keys=["image2d", "image3d"]),  I think this is not necessary as it already returns Tensors
+            
         ]
     )
 
@@ -119,11 +121,8 @@ def get_data_loader(
 
     return loader
 
-lr = 1e-4
-train_val_split = 0.8
 batch_size = 1
-num_workers = 4
-exp_mode = "full"
+num_workers = 0
     
 train_loader = get_data_loader(
         images2d_path , 
@@ -132,8 +131,27 @@ train_loader = get_data_loader(
         gt3d_path ,
         batch_size=batch_size,
         num_workers=num_workers,
-        transforms=get_transforms(mode=exp_mode),
+        transforms=get_transforms(),
     )
 
 a  = iter(train_loader)
-a1 = next(a)
+
+for i in range(1):
+    a1 = next(a)
+    
+    img2d = a1["image2d"][0,0,:].numpy()
+    gt2d = a1["label2d"][0,0,:].numpy()
+    
+    img3d = a1["image3d"].numpy()
+    gt3d = a1["label3d"].numpy()
+    
+    print(img3d.shape)
+    print(gt3d.shape)
+
+    
+    # tf = a1["image2d_meta_dict"]
+    # b =tf["pixdim"].numpy()
+    
+    
+
+ 
